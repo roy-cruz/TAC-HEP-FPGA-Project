@@ -1,0 +1,27 @@
+ds_name: embedding_hlt_smcocktail
+data_processing:
+  redir: root://cmseos.fnal.gov/
+  sample_dir: /store/user/rcruzcan/adhlt
+  out_path: ./data/
+  nevents_per_class: 111000 # ~80,000 events per class in training dataset
+  n_objects: 400
+  sort_by_pt: True
+  split: 0.8
+  flags: [
+    "L1_AXO_VLoose",
+    "L1_AXO_Loose",
+    "L1_AXO_Medium",
+    "L1_AXO_Tight",
+    "L1_AXO_VTight",
+    "L1_AXO_VVTight",
+    "L1_AXO_VVVTight",
+  ]
+  samples:
+    - QCD:
+      - QCD_Bin-PT-15to7000_Par-PT-flat2022_TuneCP5_13p6TeV_pythia8_combined.root
+    - DY:
+      - DYto2L-4Jets_Par-4J-MLL-50_TuneCP5_13p6TeV_madgraphMLM-pythia8_combined.root
+    - WJet:
+      - WJetsToLNu_TuneCP5_13p6TeV_madgraphMLM-pythia8_combined.root
+    - TT:
+      - TT_TuneCP5_13p6TeV_powheg-pythia8_combined.root

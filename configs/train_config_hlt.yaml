@@ -1,0 +1,21 @@
+model_name: embedding_hlt_linformer
+# NOTE: Loss = SupCon
+data:
+  val_split: 0.1
+  preproc_type: "PFPreProcessor"
+hyperparameters:
+  # Training
+  mixed_prec: true
+  num_epochs: 200
+  lr: 0.001
+  patience: 20
+  contrast_loss: "SupConLoss"
+  augmentation: true 
+  batch_size: 128
+  # Architecture
+  embed_size: 128
+  latent_dim: 6 
+  proj_dim: 6
+  num_layers: 4
+  num_heads: 8
+  linear_dim: 16
