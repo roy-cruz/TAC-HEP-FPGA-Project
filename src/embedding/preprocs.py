@@ -53,42 +53,42 @@ class PFPreProcessor(nn.Module):
 
         valid = pt_raw > 0 # [B, N]
         
-        if valid.any():
-            pt = torch.where(valid, pt_raw, torch.zeros_like(pt_raw))
-            pt = pt / (pt.sum(dim=-1, keepdim=True) + EPS)
-            pt[valid] = torch.log(pt[valid]) 
-            
-            dxy = torch.where(valid, dxy_raw, torch.zeros_like(dxy_raw))
-            dxy[valid] = torch.tanh(dxy_raw[valid])
+        # if valid.any():
+        pt = torch.where(valid, pt_raw, torch.zeros_like(pt_raw))
+        pt = pt / (pt.sum(dim=-1, keepdim=True) + EPS)
+        pt[valid] = torch.log(pt[valid]) 
+        
+        dxy = torch.where(valid, dxy_raw, torch.zeros_like(dxy_raw))
+        dxy[valid] = torch.tanh(dxy_raw[valid])
 
-            pos = (pdgId_raw == 11) | (pdgId_raw == 13) | (pdgId_raw == 211)
-            neg = (pdgId_raw == -11) | (pdgId_raw == -13) | (pdgId_raw == -211)
-            charge = torch.zeros_like(valid, dtype=torch.float)
-            charge[valid & pos] = 1.0
-            charge[valid & neg] = -1.0
-            
-            pdgId_onehot = self.pdgId_to_onehot(pdgId_raw)
-            
-            x_proc = torch.cat([
-                pt.unsqueeze(-1),
-                eta_raw.unsqueeze(-1),
-                phi_raw.unsqueeze(-1),
-                dxy.unsqueeze(-1),
-                dxysig_raw.unsqueeze(-1),
-                # Next ones NOT are not continuous, so NOT fed to batch norm layer.
-                charge.unsqueeze(-1), # Computed
-                is_pf_raw.unsqueeze(-1),
-                pdgId_onehot
-            ], dim=-1)
+        pos = (pdgId_raw == 11) | (pdgId_raw == 13) | (pdgId_raw == 211)
+        neg = (pdgId_raw == -11) | (pdgId_raw == -13) | (pdgId_raw == -211)
+        charge = torch.zeros_like(valid, dtype=torch.float)
+        charge[valid & pos] = 1.0
+        charge[valid & neg] = -1.0
+        
+        pdgId_onehot = self.pdgId_to_onehot(pdgId_raw)
+        
+        x_proc = torch.cat([
+            pt.unsqueeze(-1),
+            eta_raw.unsqueeze(-1),
+            phi_raw.unsqueeze(-1),
+            dxy.unsqueeze(-1),
+            dxysig_raw.unsqueeze(-1),
+            # Next ones NOT are not continuous, so NOT fed to batch norm layer.
+            charge.unsqueeze(-1), # Computed
+            is_pf_raw.unsqueeze(-1),
+            pdgId_onehot
+        ], dim=-1)
 
-            # Masked batch norm on continuous ftrs
-            x_cont = x_proc[..., :self.num_features_cont]  # [B, N, num_cont]
-            B, N, C = x_cont.shape
-            x_cont_flat = x_cont.reshape(B * N, C)
-            valid_flat = valid.reshape(B * N)
-            x_cont_flat[valid_flat] = self.batch_norm(x_cont_flat[valid_flat])
-            x_proc[..., :self.num_features_cont] = x_cont_flat.reshape(B, N, C)
-        else:
-            x_proc = torch.zeros(*x.shape[:-1], self.num_features, device=x.device)
+        # Masked batch norm on continuous ftrs
+        x_cont = x_proc[..., :self.num_features_cont]  # [B, N, num_cont]
+        B, N, C = x_cont.shape
+        x_cont_flat = x_cont.reshape(B * N, C)
+        valid_flat = valid.reshape(B * N)
+        x_cont_flat[valid_flat] = self.batch_norm(x_cont_flat[valid_flat])
+        x_proc[..., :self.num_features_cont] = x_cont_flat.reshape(B, N, C)
+        # else:
+            # x_proc = torch.zeros(*x.shape[:-1], self.num_features, device=x.device)
         
         return x_proc

@@ -2,16 +2,25 @@ from typing import Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 class LinearAttentionLayer(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, linear_dim: int, num_tokens: int, pairwise: bool = False):
+    def __init__(
+            self, 
+            embed_dim: int, 
+            num_heads: int, 
+            linear_dim: int, 
+            num_tokens: int, 
+            batch_size: int = 1,
+            pairwise: bool = False
+        ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         assert embed_dim % num_heads == 0
         self.pairwise = pairwise
+        self.batch_size = batch_size
+        self.num_tokens = num_tokens
 
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
@@ -29,31 +38,21 @@ class LinearAttentionLayer(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, pairwise_feats: Union[None, torch.Tensor] = None, key_padding_mask: Union[None, torch.Tensor] = None):
-        B, N, E = x.shape
+        B, N, E = self.batch_size, self.num_tokens, self.embed_dim
 
         Q = self.q_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # B,H,N,head_dim
         K = self.k_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # B,H,N,head_dim
         V = self.v_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # B,H,N,head_dim
         
-        if key_padding_mask is not None:
-            expanded_mask = key_padding_mask.unsqueeze(1).unsqueeze(-1).expand(B, 1, N, self.head_dim)  # B,1,N,head_dim
-            K = K.masked_fill(expanded_mask, 0.0)
-            V = V.masked_fill(expanded_mask, 0.0)
+        # expanded_mask = key_padding_mask.unsqueeze(1).unsqueeze(-1).expand(B, 1, N, self.head_dim)  # B,1,N,head_dim
+        expanded_mask = key_padding_mask.reshape(B, 1, N, 1).repeat(1, 1, 1, self.head_dim)  # B,1,N,head_dim
+        K = K.masked_fill(expanded_mask, 0.0)
+        V = V.masked_fill(expanded_mask, 0.0)
 
         K_prime = self.e_proj(K.transpose(2, 3)).transpose(2, 3) # B,H,linear_dim,head_dim
         V_prime = self.f_proj(V.transpose(2, 3)).transpose(2, 3) # B,H,linear_dim,head_dim
         
-        scores = torch.matmul(Q, K_prime.transpose(-2, -1)) / math.sqrt(self.head_dim)  # (B,H,N,head_dim)x(B,H,head_dim,linear_dim) => B,H,N,linear_dim
-        
-        if self.pairwise: # add pairwise bias only if enabled
-            if pairwise_feats is None:
-                raise ValueError("pairwise_feats must be provided when pairwise is True")
-            bias_logits = self.bias_mlp(pairwise_feats)  # (B, N, N, H)
-            bias_logits = bias_logits.permute(0, 3, 1, 2)  # (B, H, N, N)
-            bias_logits_prime = self.e_proj(bias_logits) # NEW. B,H,N,linear_dim
-
-            scores = scores + bias_logits_prime
-
+        scores = torch.matmul(Q, K_prime.transpose(-2, -1)) / torch.sqrt(torch.tensor(self.head_dim))  # (B,H,N,head_dim)x(B,H,head_dim,linear_dim) => B,H,N,linear_dim
         attn = torch.softmax(scores, dim=-1)  # B,H,N,linear_dim
         out = torch.matmul(attn, V_prime)  # (B,H,N,linear_dim)x(B,H,linear_dim,head_dim) => B,H,N,head_dim
 
@@ -70,12 +69,20 @@ class TransformerEncoderBlock(nn.Module):
             dropout: float = 0.1, 
             linear_dim: Union[int, None] = None, 
             num_tokens: Union[int, None] = None,
-            pairwise: bool = False
+            pairwise: bool = False,
+            batch_size: int = 1,
         ):
         super().__init__()
         if linear_dim is not None and num_tokens is None:
             raise ValueError("num_tokens must be provided if linear_dim is specified")
-        self.self_attn = AttentionLayer(embed_dim, num_heads, pairwise) if linear_dim is None else LinearAttentionLayer(embed_dim, num_heads, linear_dim, num_tokens, pairwise)
+        self.self_attn = LinearAttentionLayer(
+            embed_dim, 
+            num_heads, 
+            linear_dim, 
+            num_tokens, 
+            batch_size=batch_size,
+            pairwise=pairwise
+        )
         self.linear1 = nn.Linear(embed_dim, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, embed_dim)
@@ -123,6 +130,7 @@ class TransformerEncoder(nn.Module):
             linear_dim: Union[int, None] = None,
             num_tokens: Union[int, None] = None,
             pairwise: bool = False,
+            batch_size: int = 1
         ):
         super().__init__()
         self.input_proj = nn.Linear(num_features, embed_size)
@@ -133,7 +141,8 @@ class TransformerEncoder(nn.Module):
                     num_heads, 
                     linear_dim=linear_dim, 
                     num_tokens=num_tokens+1 if num_tokens is not None else None,
-                    pairwise=pairwise
+                    pairwise=pairwise,
+                    batch_size=batch_size
                 ) for _ in range(num_layers)
             ]
         )
@@ -141,30 +150,20 @@ class TransformerEncoder(nn.Module):
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_size))
         self.bottleneck = nn.Linear(embed_size, latent_dim)
         self.pairwise = pairwise # bool
+        self.batch_size = batch_size
+        self.num_tokens = num_tokens
 
     def forward(self, x: torch.Tensor, pairwise_feats: Union[None, torch.Tensor] = None, mask: Union[None, torch.Tensor] = None):
-        B, N, F = x.shape
+        B = self.batch_size
         x = self.input_proj(x) # [B, N, E]
 
-        cls_tokens = self.cls_token.expand(B, -1, -1)
+        # cls_tokens = self.cls_token.expand(B, -1, -1)
+        cls_tokens = self.cls_token.repeat(B, 1, 1)  # (B, 1, embed_size)
         x = torch.cat([cls_tokens, x], dim=1) 
         device = x.device
-
-        if self.pairwise != (pairwise_feats is not None):
-            raise ValueError(
-                f"Pairwise mode is {self.pairwise}, but pairwise_feats was "
-                f"{'provided' if pairwise_feats is not None else 'not provided'}"
-            )
-        
-        pairwise_bias = None
-        if self.pairwise:
-            N = x.size(1)
-            B = x.size(0)
-            pairwise_bias = torch.zeros(B, N, N, 1, device=device)
-            pairwise_bias[:, 1:, 1:, 0] = pairwise_feats[..., 0]
             
         for layer in self.layers:
-            x = layer(x, pairwise_bias, src_key_padding_mask=mask)
+            x = layer(x, None, src_key_padding_mask=mask)
 
         cls_embedding = x[:, 0, :] # CLS token embedding
         latent = self.bottleneck(self.norm_cls_embedding(cls_embedding))
@@ -185,5 +184,5 @@ class Projector(nn.Module):
 
     def forward(self, z):
         z = self.net(z)
-        z = F.normalize(z, dim=-1)
-        return z
+        norm = torch.sqrt(torch.sum(z**2, dim=-1, keepdim=True) + 1e-6)
+        return z / norm
